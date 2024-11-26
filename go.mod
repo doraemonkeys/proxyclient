@@ -1,4 +1,4 @@
-module proxyclient
+module github.com/doraemonkeys/proxyclient
 
 go 1.23.2
 

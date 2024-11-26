@@ -36,6 +36,7 @@ func canonicalAddr(url *url.URL) string {
 	}
 	return net.JoinHostPort(idnaASCIIFromURL(url), port)
 }
+
 func idnaASCIIFromURL(url *url.URL) string {
 	addr := url.Hostname()
 	if v, err := idnaASCII(addr); err == nil {
