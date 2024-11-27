@@ -3,6 +3,7 @@ package proxyclient
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -38,6 +39,7 @@ type ProxyConn struct {
 	net.Conn
 	proxyURL        *url.URL
 	targetAddr      *url.URL
+	tlsState        *tls.ConnectionState
 	ExtraHeaderFunc func(h http.Header)
 }
 
@@ -54,11 +56,11 @@ func (c *HttpProxyClient) DialTCPContext(ctx context.Context, address string) (*
 		return &net.OpError{Op: "proxyconnect", Net: "tcp", Err: err}
 	}
 	addr := canonicalAddr(c.proxyURL)
-	if c.DialContext == nil {
-		var zeroDialer net.Dialer
-		c.DialContext = zeroDialer.DialContext
+	dialContext := c.DialContext
+	if dialContext == nil {
+		dialContext = zeroDialer.DialContext
 	}
-	conn, err := c.DialContext(ctx, "tcp", addr)
+	conn, err := dialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, wrapErr(err)
 	}
@@ -66,23 +68,28 @@ func (c *HttpProxyClient) DialTCPContext(ctx context.Context, address string) (*
 	// if !ok {
 	// 	return nil, wrapErr(fmt.Errorf("internal error: invalid connection type: %T", conn))
 	// }
+	return c.handleConnect(ctx, conn, c.proxyURL, targetAddr)
+}
+
+func (c *baseProxyClient) handleConnect(ctx context.Context, conn net.Conn, proxyURL, targetAddr *url.URL) (*ProxyConn, error) {
+	var err error
 	if targetAddr.Scheme == "http" {
 		return &ProxyConn{
 			Conn:       conn,
-			proxyURL:   c.proxyURL,
+			proxyURL:   proxyURL,
 			targetAddr: targetAddr,
 			ExtraHeaderFunc: func(h http.Header) {
-				h.Set("Proxy-Authorization", proxyAuth(c.proxyURL))
+				h.Set("Proxy-Authorization", proxyAuth(proxyURL))
 			},
 		}, nil
 	}
 
 	var hdr http.Header
 	if c.GetProxyConnectHeader != nil {
-		hdr, err = c.GetProxyConnectHeader(ctx, c.proxyURL, targetAddr.Host)
+		hdr, err = c.GetProxyConnectHeader(ctx, proxyURL, targetAddr.Host)
 		if err != nil {
 			_ = conn.Close()
-			return nil, wrapErr(err)
+			return nil, err
 		}
 	} else {
 		hdr = c.ProxyConnectHeader
@@ -132,7 +139,7 @@ func (c *HttpProxyClient) DialTCPContext(ctx context.Context, address string) (*
 		return nil, err2
 	}
 	if c.OnProxyConnectResponse != nil {
-		err = c.OnProxyConnectResponse(ctx, c.proxyURL, connectReq, resp)
+		err = c.OnProxyConnectResponse(ctx, proxyURL, connectReq, resp)
 		if err != nil {
 			_ = conn.Close()
 			return nil, err
@@ -149,7 +156,7 @@ func (c *HttpProxyClient) DialTCPContext(ctx context.Context, address string) (*
 	}
 	return &ProxyConn{
 		Conn:       conn,
-		proxyURL:   c.proxyURL,
+		proxyURL:   proxyURL,
 		targetAddr: targetAddr,
 	}, nil
 }

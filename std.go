@@ -2,10 +2,12 @@ package proxyclient
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 	"unicode"
 
 	"golang.org/x/net/idna"
@@ -89,6 +91,28 @@ type baseProxyClient struct {
 	// a proxy for a CONNECT request. It's called before the check for a 200 OK response.
 	// If it returns an error, the request fails with that error.
 	OnProxyConnectResponse func(ctx context.Context, proxyURL *url.URL, connectReq *http.Request, connectRes *http.Response) error
+
+	// DialTLSContext specifies an optional dial function for creating
+	// TLS connections for non-proxied HTTPS requests.
+	//
+	// If DialTLSContext is nil (and the deprecated DialTLS below is also nil),
+	// DialContext and TLSClientConfig are used.
+	//
+	// If DialTLSContext is set, the Dial and DialContext hooks are not used for HTTPS
+	// requests and the TLSClientConfig and TLSHandshakeTimeout
+	// are ignored. The returned net.Conn is assumed to already be
+	// past the TLS handshake.
+	DialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// TLSClientConfig specifies the TLS configuration to use with
+	// tls.Client.
+	// If nil, the default configuration is used.
+	// If non-nil, HTTP/2 support may not be enabled by default.
+	TLSClientConfig *tls.Config
+
+	// TLSHandshakeTimeout specifies the maximum amount of time to
+	// wait for a TLS handshake. Zero means no timeout.
+	TLSHandshakeTimeout time.Duration
 }
 
 // See 2 (end of page 4) https://www.ietf.org/rfc/rfc2617.txt
@@ -115,4 +139,21 @@ func proxyAuth(proxyURL *url.URL) string {
 	return ""
 }
 
+// cloneTLSConfig returns a shallow clone of cfg, or a new zero tls.Config if
+// cfg is nil. This is safe to call even if cfg is in active use by a TLS
+// client or server.
+func cloneTLSConfig(cfg *tls.Config) *tls.Config {
+	if cfg == nil {
+		return &tls.Config{}
+	}
+	return cfg.Clone()
+}
+
+type tlsHandshakeTimeoutError struct{}
+
+func (tlsHandshakeTimeoutError) Timeout() bool   { return true }
+func (tlsHandshakeTimeoutError) Temporary() bool { return true }
+func (tlsHandshakeTimeoutError) Error() string   { return "net/http: TLS handshake timeout" }
+
 var testHookProxyConnectTimeout = context.WithTimeout
+var zeroDialer net.Dialer
